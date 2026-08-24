@@ -434,7 +434,7 @@
 
 <script>
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-const GAS_URL = 'https://script.google.com/a/macros/media-console.com/s/AKfycbwxQbPJgEq7_3XvYCqgT6ukcbpcPPqXVmrow94_QUKkYxvb3AFs9LzSB1a3tud4M_wlrQ/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwZQS26Nxih0nFcNCV8STNrFGmBz817IXM6j3He_AQjZLordwH8wG1RWt_dAhuFzEL94w/exec';
 
 // ─── PUBLIC MARKETING PAGE CONFIG ──────────────────────────────────────────────
 // Only destinations listed here will ever be selectable or shown on this public page.
@@ -1902,40 +1902,5 @@ function switchBiPage(pageName) {
   }
 })();
 </script>
-  <script>
-(function () {
-  var TRACKING_WEB_APP_URL =
-    'https://ad-performance.github.io/hotel-booking-insights/hotel-booking-marketing.html';
-
-  var params = new URLSearchParams(window.location.search);
-  var token = params.get('mc_tracking');
-
-  if (!token) {
-    return;
-  }
-
-  var trackingImage = new Image();
-
-  trackingImage.src =
-    TRACKING_WEB_APP_URL +
-    '?a=click_background&t=' +
-    encodeURIComponent(token) +
-    '&ts=' +
-    new Date().getTime();
-
-  params.delete('mc_tracking');
-
-  var cleanQuery = params.toString();
-
-  var cleanUrl =
-    window.location.pathname +
-    (cleanQuery ? '?' + cleanQuery : '') +
-    window.location.hash;
-
-  window.history.replaceState({}, document.title, cleanUrl);
-})();
-</script>
-
-</body>
 </body>
 </html>

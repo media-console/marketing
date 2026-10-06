@@ -562,13 +562,13 @@ function loadViaJsonp() {
         showLoadError('Backend error: ' + (res && res.message ? res.message : 'Unknown error'));
         return;
       }
+      if (res.encoding === 'gzip-base64') {
+        unpackPayload(res.data).then(function(p){ payload = p || {}; startDashboard(); })
+          .catch(function(err){ showLoadError('Data error: ' + err.message); });
+        return;
+      }
       payload = res.payload || {};
-      applyContent();
-      setupFilters();
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('app').style.display = 'block';
-      render();
-      initLeadLock();
+      startDashboard();
     } catch (err) {
       showLoadError('Render error: ' + err.message);
     }
@@ -580,6 +580,29 @@ function loadViaJsonp() {
 
   script.src = GAS_URL + '?action=getClientPayload&callback=' + callbackName;
   document.body.appendChild(script);
+}
+
+function startDashboard() {
+  try {
+    applyContent();
+    setupFilters();
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    render();
+    initLeadLock();
+  } catch (err) {
+    showLoadError('Render error: ' + err.message);
+  }
+}
+
+function unpackPayload(b64) {
+  if (typeof DecompressionStream === 'undefined') {
+    return Promise.reject(new Error('This browser is too old to open the dashboard. Please update Chrome, Edge or Safari.'));
+  }
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Response(stream).text().then(function(text){ return JSON.parse(text); });
 }
 
 function showLoadError(message) {

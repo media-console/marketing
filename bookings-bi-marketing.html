@@ -31,6 +31,11 @@
   
     .booking-summary-bottom{margin-top:16px;margin-bottom:0}
     .future-filter-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}.future-filter-row select{min-width:180px}
+  .pipeline-year-bar{display:flex;justify-content:flex-end;align-items:end;margin:0 0 14px}
+  .pipeline-year-control{display:flex;flex-direction:column;gap:6px;min-width:150px}
+  .pipeline-year-control label{font-size:11px;font-weight:800;letter-spacing:.08em;color:#7b8798;text-transform:uppercase}
+  .pipeline-year-control select{height:40px;min-width:150px;border-radius:12px;font-weight:700}
+
     .hover-popover{display:none;position:fixed;z-index:9999;width:560px;background:rgba(255,255,255,.98);border:1px solid #dfe7f3;border-radius:24px;box-shadow:0 22px 55px rgba(15,23,42,.14);backdrop-filter:blur(12px);padding:18px;pointer-events:none}.hover-popover.open{display:block}.hover-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #edf2f8}.hover-label{font-size:12px;color:#7c879a;font-weight:800;letter-spacing:.06em;text-transform:uppercase;margin-bottom:3px}.hover-title{font-size:26px;line-height:1.08;font-weight:800;letter-spacing:-.035em;color:#07153a}.hover-badge{border-radius:999px;padding:8px 12px;background:#f2f6ff;color:#0058ff;font-size:11px;line-height:1;letter-spacing:.09em;font-weight:800;white-space:nowrap}.hover-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}.hover-kpi{min-height:78px;border:1px solid #e6edf7;border-radius:16px;padding:12px 13px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%)}.hover-kpi-label{font-size:11px;line-height:1.2;color:#71809a;font-weight:800;margin-bottom:7px}.hover-kpi-value{font-size:20px;line-height:1.05;color:#07153a;font-weight:800;letter-spacing:-.035em}.hover-chart-card{border:1px solid #e6edf7;border-radius:18px;padding:14px 14px 12px;background:#fff}.hover-chart-title{font-size:14px;font-weight:800;color:#07153a;margin-bottom:8px}.hover-chart-box{height:132px;position:relative}
     .metric-card.no-status .gap-line{display:none}.benchmark-revenue-line{display:none}
     @media(max-width:900px){.hover-popover{display:none!important}.future-filter-row{display:grid;grid-template-columns:1fr}.mix-grid{grid-template-columns:1fr}}
@@ -373,6 +378,9 @@
               </div>
             </div>
             <div class="bi-page" data-page="pipeline">
+              <div class="pipeline-year-bar">
+                <div class="pipeline-year-control"><label for="pipelineStayYear">Stay Year</label><select id="pipelineStayYear" onchange="setPipelineStayYear(this.value)"></select></div>
+              </div>
               <div class="grid-2">
                 <div class="card"><div class="card-head"><div><div class="card-kicker">Revenue Contribution</div><div class="card-title">Revenue by Check-in Month</div></div></div><div class="chart-box"><canvas id="futureRevenueChart"></canvas></div><div class="insight-callout" id="pipelineInsight"></div></div>
                 <div class="card"><div class="card-head"><div><div class="card-kicker">Room Night Contribution</div><div class="card-title">Room Nights by Check-in Month</div></div></div><div class="chart-box"><canvas id="roomNightsChart"></canvas></div><div class="insight-callout" id="roomNightsInsight"></div></div>
@@ -436,7 +444,7 @@
 
 <script>
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwuW5-gB4N8UVQ0VOJkmcEQN5cA5SrPIVuseuXE_TlijZ3zAK4GBHwfwx8VgGiCZcnpXA/exec?authuser=0';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwZQS26Nxih0nFcNCV8STNrFGmBz817IXM6j3He_AQjZLordwH8wG1RWt_dAhuFzEL94w/exec';
 
 // ─── PUBLIC MARKETING PAGE CONFIG ──────────────────────────────────────────────
 // Only destinations listed here will ever be selectable or shown on this public page.
@@ -525,6 +533,7 @@ function loadAllowedDestinations(){
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 let payload = {};
+let selectedStayYear = '';
 let charts = {};
 let hoverCharts = {};
 let currentSourceRows = [];
@@ -569,7 +578,7 @@ function loadViaJsonp() {
     showLoadError('Failed to load data. Please try again.');
   };
 
-  script.src = GAS_URL + '&action=getClientPayload&callback=' + callbackName;
+  script.src = GAS_URL + '?action=getClientPayload&callback=' + callbackName;
   document.body.appendChild(script);
 }
 
@@ -642,6 +651,28 @@ function setupFilters() {
   if (marketOptions) {
     marketOptions.innerHTML = markets.map(v => '<option value="' + escapeAttr(v) + '"></option>').join('');
   }
+  setupStayYearControls();
+}
+
+function getRowStayYear(r){ return String((r && r['Stay Year']) || '').trim(); }
+function getAvailableStayYears(){
+  const rows=(payload.futurePipeline||[]).concat(payload.destinationFuturePipeline||[],payload.futureSourceMarket||[],payload.destinationFutureSourceMarket||[]);
+  return unique(rows.map(getRowStayYear).filter(y=>/^\d{4}$/.test(y))).sort((a,b)=>Number(a)-Number(b));
+}
+function setupStayYearControls(){
+  const years=getAvailableStayYears(), current=String(new Date().getFullYear());
+  if(!selectedStayYear||!years.includes(selectedStayYear)) selectedStayYear=years.includes(current)?current:(years[0]||'');
+  const select=document.getElementById('pipelineStayYear');
+  if(select){
+    select.innerHTML=years.map(y=>'<option value="'+escapeAttr(y)+'"'+(y===selectedStayYear?' selected':'')+'>'+escapeHtml(y)+'</option>').join('');
+    select.disabled=!years.length;
+    const bar=select.closest('.pipeline-year-bar'); if(bar) bar.style.display=years.length?'':'none';
+  }
+}
+function setPipelineStayYear(year){
+  selectedStayYear=String(year||'');
+  highlightedMatrixMonths=[];matrixShowAll=false;
+  render();
 }
 
 let renderDebounceTimer = null;
@@ -694,7 +725,7 @@ function getFilteredView() {
   let monthlyRows = [], sourceRows = [], futureRows = [];
   monthlyRows = (payload.destinationMonth || []).filter(r => matchesDest(r.Destination,dest) && (!selectedMonths.length || selectedMonths.includes(r.Month)));
   sourceRows = (payload.destinationSourceMarketMonth || []).filter(r => matchesDest(r.Destination,dest) && (!selectedMonths.length || selectedMonths.includes(r.Month))).map(toSourceRow);
-  futureRows = (payload.destinationFuturePipeline || []).filter(r => matchesDest(r.Destination,dest)).map(toFutureRow);
+  futureRows = (payload.destinationFuturePipeline || []).filter(r => matchesDest(r.Destination,dest) && (!selectedStayYear||getRowStayYear(r)===selectedStayYear)).map(toFutureRow);
   monthlyRows = combineMonthlyRows(monthlyRows);
   futureRows = combineFutureRows(futureRows);
   sourceRows = combineSourceRows(sourceRows).sort((a,b)=>b.revenue-a.revenue);
@@ -729,7 +760,7 @@ function combineFutureRows(rows){
 }
 
 function toSourceRow(r){ return { market: r['Source Market'], revenue: numVal(r.Revenue), nights: numVal(r['Room Nights']), bookings: numVal(r.Bookings), abv: numVal(r['Avg Booking Value']), los: numVal(r['Avg LOS']), blt: numVal(r['Avg BLT']) }; }
-function toFutureRow(r){ return { month: r['Check-in Month'], revenue: numVal(r.Revenue), nights: numVal(r['Room Nights']), bookings: numVal(r.Bookings) }; }
+function toFutureRow(r){ return { year:getRowStayYear(r), month: r['Check-in Month'], revenue: numVal(r.Revenue), nights: numVal(r['Room Nights']), bookings: numVal(r.Bookings) }; }
 function combineSourceRows(rows){
   const map = {};
   rows.forEach(r => { const k = r.market||'Unknown'; if(!map[k]) map[k]={market:k,revenue:0,nights:0,bookings:0,bltTotal:0}; map[k].revenue+=r.revenue||0; map[k].nights+=r.nights||0; map[k].bookings+=r.bookings||0; map[k].bltTotal+=(r.blt||0)*(r.bookings||0); });
@@ -1260,7 +1291,7 @@ function createHoverChart(id,config){const ctx=document.getElementById(id);if(!c
 
 function getFutureMonthTopMarkets(month,metric){
   const view=currentView||getFilteredView(),dest=view.dest;
-  const raw=(payload.destinationFutureSourceMarket||[]).filter(r=>matchesDest(r.Destination,dest));
+  const raw=(payload.destinationFutureSourceMarket||[]).filter(r=>matchesDest(r.Destination,dest)&&(!selectedStayYear||getRowStayYear(r)===selectedStayYear));
   const filtered=raw.filter(r=>String(r['Check-in Month']||'').slice(0,3)===String(month||'').slice(0,3));
   const byMarket={};
   filtered.forEach(r=>{const market=r['Source Market']||'Unknown';if(!byMarket[market])byMarket[market]={market,revenue:0,nights:0};byMarket[market].revenue+=numVal(r.Revenue);byMarket[market].nights+=numVal(r['Room Nights']);});
@@ -1372,16 +1403,16 @@ function applyMatrixHighlight(){
   });
 }
 function formatMatrixPeriodLabel(selected,allMonths){
-  if(!selected.length)return'Jan – Dec';
+  if(!selected.length)return'Jan – Dec'+(selectedStayYear?' '+selectedStayYear:'');
   const indices=selected.map(m=>allMonths.indexOf(m)).sort((a,b)=>a-b);
   let contiguous=true;
   for(let i=1;i<indices.length;i++){if(indices[i]!==indices[i-1]+1){contiguous=false;break;}}
-  if(contiguous&&indices.length>1)return allMonths[indices[0]]+' – '+allMonths[indices[indices.length-1]];
-  return indices.map(i=>allMonths[i]).join(', ');
+  if(contiguous&&indices.length>1)return allMonths[indices[0]]+' – '+allMonths[indices[indices.length-1]]+(selectedStayYear?' '+selectedStayYear:'');
+  return indices.map(i=>allMonths[i]).join(', ')+(selectedStayYear?' '+selectedStayYear:'');
 }
 function renderFutureGeoTable(view){
   const dest=view.dest,months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  let raw=(payload.destinationFutureSourceMarket||[]).filter(r=>matchesDest(r.Destination,dest));
+  let raw=(payload.destinationFutureSourceMarket||[]).filter(r=>matchesDest(r.Destination,dest)&&(!selectedStayYear||getRowStayYear(r)===selectedStayYear));
   const byMarket={};
   raw.forEach(r=>{const market=r['Source Market']||'Unknown',month=String(r['Check-in Month']||'').slice(0,3);if(!months.includes(month))return;if(!byMarket[market])byMarket[market]={market,totalRevenue:0,totalNights:0,totalBookings:0,months:{}};if(!byMarket[market].months[month])byMarket[market].months[month]={revenue:0,nights:0,bookings:0};const revenue=numVal(r.Revenue),nights=numVal(r['Room Nights']),bookings=numVal(r.Bookings);byMarket[market].months[month].revenue+=revenue;byMarket[market].months[month].nights+=nights;byMarket[market].months[month].bookings+=bookings;byMarket[market].totalRevenue+=revenue;byMarket[market].totalNights+=nights;byMarket[market].totalBookings+=bookings;});
   const isNights=matrixMetric==='nights';
@@ -1614,7 +1645,7 @@ function submitLeadToBackend(lead,btn){
     if(btn){btn.disabled=false;btn.textContent='Unlock Benchmark';}
     setTimeout(function(){closeLeadModal();renderManualBenchmark();},350);
   };
-  script.src = GAS_URL + '&' + qs + '&callback=' + cbName;
+  script.src = GAS_URL + '?' + qs + '&callback=' + cbName;
   document.body.appendChild(script);
 }
 
@@ -1741,7 +1772,7 @@ function switchBiPage(pageName) {
      ═══════════════════════════════════════════════════════ -->
 <script>
 (function() {
-  const GAS_TRACK_URL = 'https://script.google.com/macros/s/AKfycbwuW5-gB4N8UVQ0VOJkmcEQN5cA5SrPIVuseuXE_TlijZ3zAK4GBHwfwx8VgGiCZcnpXA/exec?authuser=0';
+  const GAS_TRACK_URL = 'https://script.google.com/macros/s/AKfycbwZQS26Nxih0nFcNCV8STNrFGmBz817IXM6j3He_AQjZLordwH8wG1RWt_dAhuFzEL94w/exec';
   const SESSION_KEY = 'mc_vis_session_v1';
 
   if (sessionStorage.getItem(SESSION_KEY)) return;
@@ -1855,7 +1886,7 @@ function switchBiPage(pageName) {
       const sc = document.createElement('script');
       window[cb] = function() { delete window[cb]; try { document.body.removeChild(sc); } catch(e){} };
       sc.onerror = function() { delete window[cb]; try { document.body.removeChild(sc); } catch(e){} };
-      sc.src = GAS_TRACK_URL + '&' + qs + '&callback=' + cb;
+      sc.src = GAS_TRACK_URL + '?' + qs + '&callback=' + cb;
       document.body.appendChild(sc);
     }
 
@@ -1883,7 +1914,7 @@ function switchBiPage(pageName) {
 
     // ใช้ sendBeacon ถ้าทำได้ (ไม่ถูก cancel ตอนปิดหน้า)
     const qs = Object.keys(update).map(k => encodeURIComponent(k) + '=' + encodeURIComponent(update[k])).join('&');
-    const url = GAS_TRACK_URL + '&' + qs;
+    const url = GAS_TRACK_URL + '?' + qs;
     if (navigator.sendBeacon) {
       navigator.sendBeacon(url);
     } else {

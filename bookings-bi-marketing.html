@@ -491,7 +491,7 @@ function loadAllowedDestinations(){
       if(settled)return;
       settled = true;
       reject(new Error('Timed out loading destination list.'));
-    }, 12000);
+    }, 20000);
     window.google.visualization.Query.setResponse = function(response){
       if(settled)return;
       settled = true;
@@ -540,46 +540,225 @@ let currentSourceRows = [];
 let currentView = null;
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
+let destReady = null;
 document.addEventListener('DOMContentLoaded', function () {
   buildGeoTable();
-  loadAllowedDestinations().then(function(names){
-    ALLOWED_DESTINATIONS = names;
-    loadViaJsonp();
-  }).catch(function(err){
-    showLoadError('This page is not fully set up yet (destination list unavailable). Please contact the site admin. Details: ' + err.message);
-  });
+  loadDestinations();
+  loadViaJsonp();   // runs in parallel with the destination list
 });
+function loadDestinations(){
+  destReady = withRetry(loadAllowedDestinations,4,[0,1500,4000,8000]).then(function(names){ALLOWED_DESTINATIONS=names;});
+  destReady.catch(function(err){showLoadError(/not set up/.test(err.message) ? 'This page is not fully set up yet (destination list unavailable). Please contact the site admin. Details: '+err.message : 'Could not load the destination list ('+err.message+').', true, 'retryDestinations');});
+}
+let dashboardStarted = false, startRequested = false;
+function startWhenReady(){
+  startRequested = true;
+  destReady.then(function(){ if(!dashboardStarted){ dashboardStarted = true; startDashboard(); } }, function(){});
+}
+function retryDestinations(){
+  setProgress(3, 'Retrying\u2026');
+  loadDestinations();
+  // if the data already finished loading while the list was failing, open the dashboard now
+  destReady.then(function(){ if(startRequested && !dashboardStarted){ dashboardStarted = true; startDashboard(); } }, function(){});
+}
+
+function withRetry(fn,attempts,delays){
+  return new Promise(function(resolve,reject){
+    let i=0;
+    (function run(){
+      fn().then(resolve).catch(function(err){
+        i++;
+        if(i>=attempts)return reject(err);
+        setTimeout(run,(delays&&delays[i])||2000);
+      });
+    })();
+  });
+}
+
+// ---- progress bar (like internal) ----
+function setProgress(pct, label) {
+  const el = document.getElementById('loading');
+  if (!el) return;
+  pct = Math.max(0, Math.min(100, Math.round(pct)));
+  el.innerHTML = '<div style="text-align:center">' +
+    '<div style="font-weight:800;margin-bottom:12px">Loading dashboard\u2026 ' + pct + '%</div>' +
+    '<div style="width:260px;height:6px;background:#e3e8f2;border-radius:99px;overflow:hidden;margin:0 auto">' +
+    '<div style="width:' + pct + '%;height:100%;background:#3d5afe;transition:width .3s"></div></div>' +
+    '<div style="margin-top:10px;font-size:12px;color:#7b8798;font-weight:600">' + escapeHtml(label || '') + '</div></div>';
+}
+
+// ---- browser cache in IndexedDB (localStorage is too small and shared with other pages) ----
+function idbOpen() {
+  return new Promise(function(res, rej) {
+    if (!window.indexedDB) return rej(new Error('no indexedDB'));
+    const r = indexedDB.open('mc_bi_marketing', 1);
+    r.onupgradeneeded = function(){ r.result.createObjectStore('kv'); };
+    r.onsuccess = function(){ res(r.result); };
+    r.onerror = function(){ rej(r.error); };
+  });
+}
+function idbGet(k) {
+  return idbOpen().then(function(db) {
+    return new Promise(function(res, rej) {
+      const q = db.transaction('kv').objectStore('kv').get(k);
+      q.onsuccess = function(){ res(q.result); };
+      q.onerror = function(){ rej(q.error); };
+    });
+  }).catch(function(){ return null; });
+}
+function idbSet(k, v) {
+  return idbOpen().then(function(db) {
+    return new Promise(function(res, rej) {
+      const tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').put(v, k);
+      tx.oncomplete = function(){ res(true); };
+      tx.onerror = function(){ rej(tx.error); };
+    });
+  }).catch(function(){ return false; });
+}
+function idbDel(k) {
+  return idbOpen().then(function(db) {
+    return new Promise(function(res) {
+      const tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').delete(k);
+      tx.oncomplete = function(){ res(true); };
+      tx.onerror = function(){ res(false); };
+    });
+  }).catch(function(){ return false; });
+}
+
+// ---- one small JSONP request ----
+function jsonpOnce(params, timeoutMs) {
+  return new Promise(function(resolve, reject) {
+    const cb = 'gasCallback_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+    const script = document.createElement('script');
+    let done = false;
+    const timer = setTimeout(function(){ finish(new Error('timed out')); }, timeoutMs);
+    function finish(err, res) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      window[cb] = function(){};
+      if (script.parentNode) script.parentNode.removeChild(script);
+      if (err) reject(err); else resolve(res);
+    }
+    window[cb] = function(res) {
+      if (!res || !res.ok) return finish(new Error((res && res.message) ? res.message : 'backend error'));
+      finish(null, res);
+    };
+    script.onerror = function() { finish(new Error('network error')); };
+    script.src = GAS_URL + '?' + params + '&callback=' + cb;
+    document.body.appendChild(script);
+  });
+}
+function jsonpRetry(params, timeoutMs, label) {
+  return withRetry(function(){ return jsonpOnce(params, timeoutMs); }, 4, [0, 1500, 4000, 8000])
+    .catch(function(err){ throw new Error(label + ': ' + err.message); });
+}
+
+// run tasks with at most `limit` in flight (Google throttles bursts of parallel requests)
+function runPool(tasks, limit, onDone) {
+  return new Promise(function(resolve, reject) {
+    const results = new Array(tasks.length);
+    let next = 0, active = 0, finished = 0, failed = false;
+    if (!tasks.length) return resolve(results);
+    function launch() {
+      while (!failed && active < limit && next < tasks.length) {
+        const i = next++; active++;
+        tasks[i]().then(function(r) {
+          results[i] = r; active--; finished++;
+          if (onDone) onDone(finished, tasks.length);
+          if (finished === tasks.length) resolve(results); else launch();
+        }).catch(function(e){ failed = true; reject(e); });
+      }
+    }
+    launch();
+  });
+}
+
+// manifest (tiny) -> batches (<= ~900 KB each, 4 at a time) -> join -> JSON.parse   (same protocol as internal)
+function loadPayloadText(onProgress) {
+  if (onProgress) onProgress(5, 'Connecting\u2026');
+  return jsonpRetry('action=getClientPayloadManifest', 40000, 'manifest').then(function(m) {
+    const PER = 20, total = Math.ceil(m.chunkCount / PER), tasks = [];
+    for (let k = 0; k < total; k++) {
+      (function(idx) {
+        tasks.push(function() {
+          return jsonpRetry('action=getClientPayloadBatch&start=' + (idx * PER) + '&count=' + PER, 45000, 'batch ' + (idx + 1) + '/' + total)
+            .then(function(r) {
+              if (r.totalChunks !== m.chunkCount) throw new Error('data was just refreshed');
+              return r.data;
+            });
+        });
+      })(k);
+    }
+    if (onProgress) onProgress(10, 'Downloading data');
+    return runPool(tasks, 4, function(done, all) {
+      if (onProgress) onProgress(10 + 80 * done / all, 'Downloading data ' + done + '/' + all);
+    }).then(function(parts) {
+      const text = parts.join('');
+      if (m.expectedLength && text.length !== m.expectedLength) throw new Error('data incomplete');
+      return { text: text, version: m.generatedAt + '|' + m.expectedLength };
+    });
+  });
+}
+function loadAndParse(onProgress) {
+  return loadPayloadText(onProgress).then(function(r) {
+    if (onProgress) onProgress(94, 'Preparing dashboard\u2026');
+    return new Promise(function(res, rej) {
+      setTimeout(function() {   // let the progress bar paint before the heavy parse
+        try { res({ p: JSON.parse(r.text), r: r }); } catch (e) { rej(new Error('data parse error')); }
+      }, 30);
+    });
+  });
+}
 
 function loadViaJsonp() {
-  const callbackName = 'gasCallback_' + Date.now();
-  const script = document.createElement('script');
-
-  window[callbackName] = function(res) {
-    delete window[callbackName];
-    document.body.removeChild(script);
-    try {
-      if (!res || !res.ok) {
-        showLoadError('Backend error: ' + (res && res.message ? res.message : 'Unknown error'));
+  setProgress(3, 'Starting\u2026');
+  idbGet('payload_raw').then(function(rec) {
+    if (rec && rec.data && rec.version) {
+      // Show last good copy instantly; quietly check whether newer data exists.
+      let p = null;
+      try { p = JSON.parse(rec.data); } catch (e) {}
+      if (p) {
+        payload = p;
+        startWhenReady();
+        checkForUpdate(rec.version);
         return;
       }
-      if (res.encoding === 'gzip-base64') {
-        unpackPayload(res.data).then(function(p){ payload = p || {}; startDashboard(); })
-          .catch(function(err){ showLoadError('Data error: ' + err.message); });
-        return;
-      }
-      payload = res.payload || {};
-      startDashboard();
-    } catch (err) {
-      showLoadError('Render error: ' + err.message);
+      idbDel('payload_raw');
     }
-  };
+    loadFresh();
+  });
+}
 
-  script.onerror = function() {
-    showLoadError('Failed to load data. Please try again.');
-  };
+function checkForUpdate(ver) {
+  jsonpRetry('action=getClientPayloadManifest', 30000, 'manifest').then(function(m) {
+    if ((m.generatedAt + '|' + m.expectedLength) === ver) return;
+    return withRetry(function(){ return loadAndParse(null); }, 2, [0, 2000]).then(function(x) {
+      return idbSet('payload_raw', { version: x.r.version, data: x.r.text }).then(showNewDataBanner);
+    });
+  }).catch(function(){ /* keep showing cached data */ });
+}
 
-  script.src = GAS_URL + '?action=getClientPayload&callback=' + callbackName;
-  document.body.appendChild(script);
+function loadFresh() {
+  withRetry(function(){ return loadAndParse(setProgress); }, 2, [0, 2000]).then(function(x) {
+    idbSet('payload_raw', { version: x.r.version, data: x.r.text });
+    payload = x.p || {};
+    setProgress(100, 'Done');
+    startWhenReady();
+  }).catch(function(err) {
+    showLoadError('Failed to load data (' + err.message + ').', true);
+  });
+}
+
+function showNewDataBanner() {
+  if (document.getElementById('newDataBanner')) return;
+  const b = document.createElement('div');
+  b.id = 'newDataBanner';
+  b.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);z-index:10000;background:#10213f;color:#fff;padding:12px 18px;border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.25);font:600 13px system-ui,sans-serif;display:flex;gap:14px;align-items:center';
+  b.innerHTML = '<span>New data available</span><button type="button" style="background:#3d5afe;color:#fff;border:0;border-radius:8px;padding:7px 14px;font-weight:700;cursor:pointer" onclick="location.reload()">Refresh</button>';
+  document.body.appendChild(b);
 }
 
 function startDashboard() {
@@ -595,18 +774,13 @@ function startDashboard() {
   }
 }
 
-function unpackPayload(b64) {
-  if (typeof DecompressionStream === 'undefined') {
-    return Promise.reject(new Error('This browser is too old to open the dashboard. Please update Chrome, Edge or Safari.'));
-  }
-  const bin = atob(b64), bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
-  return new Response(stream).text().then(function(text){ return JSON.parse(text); });
+function showLoadError(message, canRetry, retryFn) {
+  document.getElementById('loading').innerHTML = '<div class="error">' + escapeHtml(message) +
+    (canRetry ? '<div style="margin-top:12px"><button type="button" class="btn primary" onclick="' + (retryFn || 'retryLoad') + '()">Try again</button></div>' : '') + '</div>';
 }
-
-function showLoadError(message) {
-  document.getElementById('loading').innerHTML = '<div class="error">' + escapeHtml(message) + '</div>';
+function retryLoad() {
+  setProgress(3, 'Retrying\u2026');
+  loadFresh();
 }
 
 // ─── BUILD GEO TABLE ──────────────────────────────────────────────────────────
